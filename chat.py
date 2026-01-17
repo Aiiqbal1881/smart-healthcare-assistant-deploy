@@ -21,12 +21,10 @@ LLM_MODEL = "llama-3.1-8b-instant"
 # ======================================================
 # EMBEDDINGS
 # ======================================================
-embeddings = SentenceTransformerEmbeddings(
-    model_name=EMBEDDING_MODEL
-)
+embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
 
 # ======================================================
-# LOAD VECTOR STORE (SAFE FALLBACK)
+# VECTOR STORE (SAFE FALLBACK FOR CLOUD)
 # ======================================================
 retriever = None
 try:
@@ -37,10 +35,10 @@ try:
     )
     retriever = db.as_retriever(search_kwargs={"k": 3})
 except Exception:
-    retriever = None  # Cloud-safe fallback
+    retriever = None
 
 # ======================================================
-# LOAD LLM
+# LLM
 # ======================================================
 llm = ChatGroq(
     groq_api_key=os.getenv("GROQ_API_KEY"),
@@ -58,43 +56,46 @@ if retriever:
     )
 
 # ======================================================
-# MEDICAL SCOPE CHECK
+# MEDICAL FILTER
 # ======================================================
 MEDICAL_KEYWORDS = [
     "symptom", "disease", "fever", "pain", "infection", "asthma",
     "diabetes", "cancer", "covid", "health", "treatment", "medicine",
-    "injury", "blood", "pressure", "mental", "depression", "anxiety",
     "cold", "flu", "headache", "vomiting", "diarrhea"
 ]
 
 def is_medical_query(query: str) -> bool:
-    query = query.lower()
-    return any(word in query for word in MEDICAL_KEYWORDS)
+    q = query.lower()
+    return any(word in q for word in MEDICAL_KEYWORDS)
 
 # ======================================================
-# AUTO-DETECT LONG ANSWER NEED
+# LONG ANSWER DETECTION
 # ======================================================
 def wants_long_answer(query: str) -> bool:
-    long_keywords = [
-        "explain", "detail", "detailed", "how", "why",
-        "causes", "effects", "complications",
-        "treatment", "management", "mechanism"
-    ]
-    query = query.lower()
-    return any(word in query for word in long_keywords)
+    return any(
+        word in query.lower()
+        for word in ["explain", "detail", "why", "how", "causes", "effects"]
+    )
 
 # ======================================================
-# FORMAT RESPONSE INTO CLEAN POINTS
+# 🔥 BULLETPROOF POINT FORMATTER (FIX)
 # ======================================================
 def format_points(text: str, max_points: int) -> str:
-    # Normalize text
-    text = text.replace("•", "\n").replace("-", "\n")
-    chunks = re.split(r"\n|\d+\.", text)
+    """
+    Converts ANY model output into clean vertical numbered points
+    """
+
+    # Remove markdown & inline numbering
+    text = re.sub(r"\*\*", "", text)
+    text = re.sub(r"\d+\.", ".", text)
+
+    # Split by sentences
+    sentences = re.split(r"[.\n]+", text)
 
     points = [
-        chunk.strip()
-        for chunk in chunks
-        if len(chunk.strip()) > 20
+        s.strip()
+        for s in sentences
+        if len(s.strip()) > 30
     ]
 
     points = points[:max_points]
@@ -106,27 +107,20 @@ def format_points(text: str, max_points: int) -> str:
     return formatted.strip()
 
 # ======================================================
-# MAIN CHAT FUNCTION
+# CHAT RESPONSE
 # ======================================================
 def chat_response(user_query: str) -> str:
-    """
-    Main chat response (Chat mode)
-    """
 
-    # ❌ Non-medical queries
     if not is_medical_query(user_query):
         return (
             "⚠️ **This assistant is designed only for medical and health-related questions.**\n\n"
-            "If you have a health concern, symptom, or disease-related question, feel free to ask.\n\n"
-            "For non-medical topics, please use a general-purpose assistant."
+            "Please ask about symptoms, diseases, or health concerns."
         )
 
     long_mode = wants_long_answer(user_query)
-    max_points = 15 if long_mode else 6
+    max_points = 12 if long_mode else 6
 
-    # ==================================================
-    # TRY RAG FIRST (if vector store exists)
-    # ==================================================
+    # -------- RAG FIRST --------
     if qa_chain:
         try:
             rag_answer = qa_chain.run(user_query)
@@ -138,37 +132,33 @@ def chat_response(user_query: str) -> str:
         except Exception:
             pass
 
-    # ==================================================
-    # FALLBACK: GENERAL MEDICAL LLM
-    # ==================================================
-    general_prompt = f"""
+    # -------- FALLBACK LLM --------
+    prompt = f"""
 You are a medical information assistant.
 
 Rules:
-- Educational information only
+- Educational only
 - No diagnosis
 - No prescriptions
-- Answer ONLY in numbered points
-- Be clear and factual
-- End with a doctor disclaimer
-
-Number of points allowed: {max_points}
+- Write SHORT, CLEAR sentences
+- EACH point must be ONE idea
+- DO NOT write paragraphs
 
 Question:
 {user_query}
 """
 
-    response = llm.invoke(general_prompt).content
+    response = llm.invoke(prompt).content
 
-    return format_points(response, max_points)
+    return (
+        format_points(response, max_points)
+        + "\n\n⚠️ Educational use only. Consult a healthcare professional."
+    )
 
 # ======================================================
-# PDF RAG (USER UPLOAD)
+# PDF RAG
 # ======================================================
 def pdf_chat_response(pdf_path: str, question: str) -> str:
-    """
-    Answer questions ONLY from uploaded PDF
-    """
 
     loader = PyPDFLoader(pdf_path)
     documents = loader.load()
@@ -191,8 +181,8 @@ def pdf_chat_response(pdf_path: str, question: str) -> str:
 
     return (
         "📄 **Answer based on uploaded medical document:**\n\n"
-        + format_points(answer, max_points=12)
-        + "\n\n⚠️ Educational use only. Consult a healthcare professional."
+        + format_points(answer, 12)
+        + "\n\n⚠️ Educational use only."
     )
 
 # ======================================================
@@ -202,9 +192,6 @@ def image_safe_response() -> str:
     return (
         "🖼️ **Image received**\n\n"
         "I cannot diagnose medical conditions from images.\n\n"
-        "However, I can help by:\n"
-        "1. Describing visible features\n"
-        "2. Explaining general medical possibilities\n"
-        "3. Suggesting when to consult a doctor\n\n"
-        "⚠️ Please consult a qualified healthcare professional."
+        "I can describe visible features and suggest when to consult a doctor.\n\n"
+        "⚠️ Consult a healthcare professional for diagnosis."
     )
