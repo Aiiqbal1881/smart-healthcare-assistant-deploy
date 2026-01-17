@@ -18,18 +18,16 @@ VECTOR_STORE_PATH = "vector_store"
 LLM_MODEL = "llama-3.1-8b-instant"
 
 # =========================
-# LOAD EMBEDDINGS
+# EMBEDDINGS
 # =========================
 embeddings = SentenceTransformerEmbeddings(
     model_name=EMBEDDING_MODEL
 )
 
 # =========================
-# LOAD VECTOR STORE (SAFE)
+# VECTOR STORE (OPTIONAL)
 # =========================
-db = None
 retriever = None
-
 if os.path.exists(VECTOR_STORE_PATH):
     try:
         db = FAISS.load_local(
@@ -42,7 +40,7 @@ if os.path.exists(VECTOR_STORE_PATH):
         retriever = None
 
 # =========================
-# LOAD LLM
+# LLM
 # =========================
 llm = ChatGroq(
     groq_api_key=os.getenv("GROQ_API_KEY"),
@@ -60,106 +58,110 @@ if retriever:
     )
 
 # =========================
-# MEDICAL QUERY CHECK
+# MEDICAL FILTER
 # =========================
 MEDICAL_KEYWORDS = [
-    "symptom", "disease", "fever", "pain", "infection", "asthma",
-    "diabetes", "cancer", "covid", "health", "treatment", "medicine",
-    "injury", "blood", "pressure", "mental", "depression", "anxiety"
+    "symptom","disease","fever","pain","infection","asthma","diabetes",
+    "cancer","covid","health","treatment","medicine","blood","pressure",
+    "mental","depression","anxiety"
 ]
 
-def is_medical_query(query: str) -> bool:
-    query = query.lower()
-    return any(word in query for word in MEDICAL_KEYWORDS)
+def is_medical_query(q: str) -> bool:
+    q = q.lower()
+    return any(word in q for word in MEDICAL_KEYWORDS)
 
 # =========================
-# FORMAT INTO SHORT POINTS
+# 🔥 HARD FORMAT POINTS (FINAL FIX)
 # =========================
 def format_points(text: str, max_points: int = 6) -> str:
     """
-    Converts text into concise ChatGPT-style numbered points
+    Forces each numbered point onto a new line.
+    Prevents inline point collapse.
     """
 
-    # Clean markdown artifacts
+    # Remove markdown
     text = re.sub(r"\*\*", "", text)
-    text = re.sub(r"\n+", "\n", text)
 
-    # Split into sentences
-    sentences = re.split(r"\.\s+|\n", text)
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+    # Force newline before numbered points
+    text = re.sub(r"(?<!\n)(\d+\.)", r"\n\1", text)
 
-    # Limit length
-    sentences = sentences[:max_points]
+    # Split into points
+    parts = re.findall(r"\d+\.\s+[^.\n]+(?:\.[^.\n]+)?", text)
 
-    formatted = ""
-    for i, sentence in enumerate(sentences, 1):
-        formatted += f"{i}. {sentence}\n"
+    if not parts:
+        sentences = re.split(r"\.\s+", text)
+        parts = sentences
 
-    return formatted.strip()
+    clean = []
+    for p in parts:
+        p = p.strip()
+        if len(p) > 25:
+            clean.append(p)
+
+    clean = clean[:max_points]
+
+    output = ""
+    for i, point in enumerate(clean, 1):
+        point = re.sub(r"^\d+\.\s*", "", point)
+        output += f"{i}. {point.strip()}\n\n"
+
+    return output.strip()
 
 # =========================
-# MAIN CHAT FUNCTION
+# CHAT RESPONSE
 # =========================
 def chat_response(user_query: str) -> str:
-    """
-    Used by app.py for normal chat
-    """
 
-    # Non-medical guardrail
     if not is_medical_query(user_query):
         return (
-            "⚠️ **This assistant is designed only for medical and health-related questions.**\n\n"
-            "If you have a health concern, symptom, or disease-related question, feel free to ask.\n\n"
-            "For non-medical topics, please use a general-purpose assistant."
+            "⚠️ **Medical questions only**\n\n"
+            "Please ask about symptoms, diseases, or health concerns."
         )
 
-    # ---------- Try RAG ----------
+    # Try RAG first
     if qa_chain:
         try:
             rag_answer = qa_chain.run(user_query)
-            if rag_answer and len(rag_answer.strip()) > 40:
+            if rag_answer and len(rag_answer) > 40:
                 return (
                     "**Based on verified medical sources:**\n\n"
-                    + format_points(rag_answer, max_points=6)
+                    + format_points(rag_answer)
                 )
         except Exception:
             pass
 
-    # ---------- Fallback LLM ----------
-    fallback_prompt = f"""
+    # Fallback
+    prompt = f"""
 You are a medical information assistant.
 
 Rules:
 - Educational use only
 - No diagnosis
 - No prescriptions
-- Respond in clear numbered points
-- Keep the answer concise (max 6 points)
-- End with a doctor disclaimer
+- Answer in short numbered points (max 6)
+- Each point on a new line
+- End with doctor disclaimer
 
 Question:
 {user_query}
 """
 
-    response = llm.invoke(fallback_prompt).content
-    return format_points(response, max_points=6)
+    response = llm.invoke(prompt).content
+    return format_points(response)
 
 # =========================
-# PDF CHAT (UPLOAD)
+# PDF CHAT
 # =========================
 def pdf_chat_response(pdf_path: str, question: str) -> str:
-    """
-    Answers questions strictly from uploaded PDF
-    """
 
     loader = PyPDFLoader(pdf_path)
-    documents = loader.load()
+    docs = loader.load()
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=100
     )
-    chunks = splitter.split_documents(documents)
+    chunks = splitter.split_documents(docs)
 
     temp_db = FAISS.from_documents(chunks, embeddings)
 
@@ -174,19 +176,18 @@ def pdf_chat_response(pdf_path: str, question: str) -> str:
     return (
         "📄 **Answer based on uploaded medical document:**\n\n"
         + format_points(answer, max_points=8)
-        + "\n\n⚠️ Educational use only. Consult a healthcare professional."
+        + "\n\n⚠️ Educational use only."
     )
 
 # =========================
-# IMAGE SAFE RESPONSE
+# IMAGE SAFETY
 # =========================
 def image_safe_response() -> str:
     return (
         "🖼️ **Image received**\n\n"
-        "I cannot diagnose medical conditions from images.\n\n"
-        "However, I can help by:\n"
-        "1. Describing visible features\n"
-        "2. Explaining general medical possibilities\n"
-        "3. Advising when to consult a doctor\n\n"
-        "⚠️ Always consult a qualified healthcare professional."
+        "I cannot diagnose from images.\n\n"
+        "1. I can describe visible features\n"
+        "2. Explain general medical possibilities\n"
+        "3. Suggest when to consult a doctor\n\n"
+        "⚠️ Consult a healthcare professional."
     )
