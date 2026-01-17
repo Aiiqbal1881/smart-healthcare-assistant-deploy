@@ -1,0 +1,18 @@
+# PDFs and large medical data
+data/medical_pdfs/
+data/medicine_info/
+
+# Vector store
+vector_store/
+*.faiss
+*.pkl
+
+# Runtime
+chat_history.db
+temp_uploaded.pdf
+
+# Env & cache
+venv/
+.env
+__pycache__/
+*.pyc
