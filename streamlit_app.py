@@ -113,9 +113,7 @@ elif mode == "📄 PDF":
         type=["pdf"]
     )
 
-    pdf_question = st.text_input(
-        "Ask a question from this PDF:"
-    )
+    pdf_question = st.text_input("Ask a question from this PDF:")
 
     if uploaded_pdf and pdf_question.strip():
         with open("temp_uploaded.pdf", "wb") as f:
@@ -127,7 +125,7 @@ elif mode == "📄 PDF":
                 pdf_question
             )
 
-        st.markdown(pdf_answer, unsafe_allow_html=True)
+        st.markdown(pdf_answer.replace("\n", "<br>"), unsafe_allow_html=True)
 
 # ================== IMAGE MODE ==================
 elif mode == "🖼 Image":
@@ -154,17 +152,20 @@ def render_chat(upto=None):
             </div>
             """, unsafe_allow_html=True)
         else:
+            # 🔥 CRITICAL FIX: preserve numbered points
+            formatted_content = msg["content"].replace("\n", "<br>")
+
             st.markdown(f"""
             <div class="chat-assistant">
-            <b>🤖 Assistant</b><br>
-            {msg["content"]}
+            <b>🤖 Assistant</b><br><br>
+            {formatted_content}
             <div class="disclaimer">
             ℹ️ Educational use only. Consult a qualified healthcare professional.
             </div>
             </div>
             """, unsafe_allow_html=True)
 
-    # Auto-scroll to bottom (ChatGPT-like)
+    # Auto-scroll (ChatGPT-like)
     st.markdown("<div id='bottom'></div>", unsafe_allow_html=True)
     st.markdown("""
     <script>
@@ -172,6 +173,6 @@ def render_chat(upto=None):
     </script>
     """, unsafe_allow_html=True)
 
-# ------------------ DISPLAY CHAT (CHAT MODE ONLY) ------------------
+# ------------------ DISPLAY CHAT ------------------
 if mode == "💬 Chat":
     render_chat(st.session_state.active_index)
