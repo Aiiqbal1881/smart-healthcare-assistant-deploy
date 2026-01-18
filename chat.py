@@ -58,15 +58,33 @@ if retriever:
 # ======================================================
 # MEDICAL FILTER
 # ======================================================
-MEDICAL_KEYWORDS = [
-    "symptom", "disease", "fever", "pain", "infection", "asthma",
-    "diabetes", "cancer", "covid", "health", "treatment", "medicine",
-    "cold", "flu", "headache", "vomiting", "diarrhea"
-]
-
 def is_medical_query(query: str) -> bool:
-    q = query.lower()
-    return any(word in q for word in MEDICAL_KEYWORDS)
+    query = query.lower()
+
+    # Broad medical coverage (OLD LOGIC)
+    medical_keywords = [
+        "symptom", "symptoms", "disease", "fever", "pain", "infection",
+        "asthma", "diabetes", "cancer", "covid", "health", "treatment",
+        "medicine", "injury", "blood", "pressure", "mental",
+        "depression", "anxiety", "stress", "panic", "disorder","flu", "cold", "headache", "vomiting", "diarrhea"
+    ]
+
+    # Intent-based triggers (NEW LOGIC)
+    intent_triggers = [
+        "what is", "explain", "define", "causes",
+        "treatment", "types", "management", "how to",
+        "why", "difference"
+    ]
+
+    # Accept if either:
+    # 1. Medical keyword exists (short queries like "fever")
+    # 2. Medical term + intent phrase (definitions, explanations)
+    return (
+        any(word in query for word in medical_keywords)
+        or any(trigger in query for trigger in intent_triggers)
+    )
+
+
 
 # ======================================================
 # LONG ANSWER DETECTION
