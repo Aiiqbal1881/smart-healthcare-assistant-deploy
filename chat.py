@@ -1,109 +1,105 @@
 import os
+import re
 from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_groq import ChatGroq
 
-# -----------------------------
-# LLM SETUP
-# -----------------------------
-def get_llm():
-    return ChatGroq(
-        groq_api_key=os.getenv("GROQ_API_KEY"),
-        model_name="llama3-8b-8192",
-        temperature=0.3,
-        max_tokens=1024
-    )
+# ---------------- CONFIG ----------------
+LLM_MODEL = "llama-3.1-8b-instant"
 
-# -----------------------------
-# CHAT RESPONSE (MEDICAL)
-# -----------------------------
-def chat_response(user_input):
-    llm = get_llm()
+llm = ChatGroq(
+    groq_api_key=os.getenv("GROQ_API_KEY"),
+    model_name=LLM_MODEL,
+    temperature=0.3
+)
 
-    prompt = f"""
-You are a professional healthcare assistant.
+# ---------------- MEDICAL CHECK ----------------
+MEDICAL_KEYWORDS = [
+    "symptom", "disease", "fever", "pain", "infection", "asthma",
+    "diabetes", "cancer", "covid", "health", "treatment", "medicine",
+    "injury", "blood", "pressure", "mental", "depression", "anxiety"
+]
 
-User query:
-{user_input}
+def is_medical_query(query: str) -> bool:
+    query = query.lower()
+    return any(word in query for word in MEDICAL_KEYWORDS)
 
-Give answer in this format:
+# ---------------- FORMAT POINTS ----------------
+def force_points(text: str, max_points=10) -> str:
+    lines = re.split(r"\n|\d+\.", text)
+    clean = [l.strip("-• ") for l in lines if len(l.strip()) > 20]
 
-1. Possible causes
-2. Common symptoms
-3. General advice (safe, non-prescriptive)
-4. When to consult a doctor
+    points = clean[:max_points]
 
-Keep it clear and simple.
-"""
+    formatted = ""
+    for i, p in enumerate(points, 1):
+        formatted += f"{i}. {p}\n"
 
-    return llm.invoke(prompt).content
+    formatted += "\n⚠️ Educational use only. Consult a healthcare professional."
+    return formatted.strip()
 
+# ---------------- CHAT RESPONSE ----------------
+def chat_response(user_query: str) -> str:
 
-# -----------------------------
-# PDF RESPONSE (FIXED)
-# -----------------------------
-def pdf_chat_response(file, question):
-    from langchain_community.document_loaders import PyPDFLoader
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-    from langchain_community.vectorstores import FAISS
-    from langchain_community.embeddings import FakeEmbeddings
-
-    # ✅ FIX: handle both string path & uploaded file
-    if isinstance(file, str):
-        file_path = file
-    else:
-        file_path = "temp.pdf"
-        with open(file_path, "wb") as f:
-            f.write(file.read())
-
-    loader = PyPDFLoader(file_path)
-    docs = loader.load()
-
-    if not docs:
-        return "❌ No readable content found in PDF."
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    chunks = splitter.split_documents(docs)
-
-    if not chunks:
-        return "❌ PDF has no usable text."
-
-    embeddings = FakeEmbeddings(size=384)
-    db = FAISS.from_documents(chunks, embeddings)
-
-    results = db.similarity_search(question, k=2)
-
-    context = "\n".join([doc.page_content for doc in results])
-
-    llm = get_llm()
+    if not is_medical_query(user_query):
+        return (
+            "⚠️ This assistant answers **medical questions only**.\n\n"
+            "Please ask a health-related question."
+        )
 
     prompt = f"""
-You are analyzing a medical report.
+You are a medical information assistant.
 
-Report Content:
-{context}
+Rules:
+- Educational use only
+- No diagnosis
+- No prescriptions
+- ALWAYS respond in numbered points
+- Maximum 10 points
+- Clear, simple language
 
 Question:
-{question}
-
-Give a clear explanation like a doctor.
+{user_query}
 """
 
-    return llm.invoke(prompt).content
+    response = llm.invoke(prompt).content
+    return force_points(response)
 
+# ---------------- PDF MODE ----------------
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 
-# -----------------------------
-# IMAGE RESPONSE (SAFE)
-# -----------------------------
-def image_safe_response(image=None):
-    return """
-⚠️ I cannot diagnose medical conditions from images.
+embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 
-However, I can help with:
-1. General observations
-2. Possible explanations
-3. When to consult a doctor
+def pdf_chat_response(pdf_path: str, question: str) -> str:
+    loader = PyPDFLoader(pdf_path)
+    docs = loader.load()
 
-Please describe your symptoms for better assistance.
-"""
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=100
+    )
+    chunks = splitter.split_documents(docs)
+
+    db = FAISS.from_documents(chunks, embeddings)
+
+    answer = llm.invoke(
+        f"Answer strictly from this document in numbered points:\n{question}"
+    ).content
+
+    return force_points(answer)
+
+# ---------------- IMAGE MODE ----------------
+def image_safe_response() -> str:
+    return (
+        "🖼️ Image received.\n\n"
+        "I cannot diagnose from images.\n\n"
+        "I can:\n"
+        "1. Describe visible features\n"
+        "2. Explain general medical info\n"
+        "3. Suggest when to see a doctor\n\n"
+        "⚠️ Educational use only."
+    )
