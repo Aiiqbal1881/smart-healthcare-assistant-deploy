@@ -1,178 +1,72 @@
 import streamlit as st
-from chat import chat_response, pdf_chat_response, image_safe_response
+from chat import chat_response, pdf_chat_response, image_analysis_response
 
-# ------------------ PAGE CONFIG ------------------
+# ------------------ PAGE ------------------
 st.set_page_config(
     page_title="Smart Healthcare Assistant",
     page_icon="🏥",
     layout="wide"
 )
 
-# ------------------ CUSTOM CSS ------------------
-st.markdown("""
-<style>
-body {
-    background-color: #0e1117;
-}
-.chat-user {
-    background-color: #1f2933;
-    padding: 14px;
-    border-radius: 10px;
-    margin-bottom: 8px;
-}
-.chat-assistant {
-    background-color: #0f3d2e;
-    padding: 14px;
-    border-radius: 10px;
-    margin-bottom: 18px;
-}
-.sidebar-title {
-    font-size: 18px;
-    font-weight: bold;
-}
-.disclaimer {
-    background-color: #102a43;
-    padding: 10px;
-    border-radius: 8px;
-    color: #9fb3c8;
-    font-size: 14px;
-    margin-top: 10px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ------------------ SESSION STATE ------------------
+# ------------------ SESSION ------------------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-if "active_index" not in st.session_state:
-    st.session_state.active_index = None
-
 # ------------------ SIDEBAR ------------------
 with st.sidebar:
-    st.markdown("<div class='sidebar-title'>🕘 Chat History</div>", unsafe_allow_html=True)
+    st.title("🕘 Chat History")
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
+            st.markdown(f"• {msg['content'][:40]}")
 
-    if not st.session_state.chat_history:
-        st.caption("No conversations yet")
-    else:
-        for i in range(0, len(st.session_state.chat_history), 2):
-            q = st.session_state.chat_history[i]["content"]
-            if st.button(q[:40] + "...", key=f"history_{i}"):
-                st.session_state.active_index = i
-
-    st.markdown("---")
-    st.markdown("""
-**Why RAG in Healthcare?**
-- Reduces hallucinations  
-- Uses verified medical documents  
-
-**Safety**
-- Non-prescriptive  
-- Emergency detection  
-- Doctor disclaimer  
-""")
-
-# ------------------ MAIN UI ------------------
+# ------------------ MAIN ------------------
 st.title("🏥 Smart Healthcare Assistant")
-st.caption("Informational use only. Not a replacement for doctors.")
+st.caption("Educational use only. Not a doctor.")
 
-# ------------------ MODE SELECTOR ------------------
 mode = st.radio(
-    "Choose interaction mode:",
+    "Choose Mode",
     ["💬 Chat", "📄 PDF", "🖼 Image"],
     horizontal=True
 )
 
-# ================== CHAT MODE ==================
+# ================= CHAT =================
 if mode == "💬 Chat":
     with st.form("chat_form", clear_on_submit=True):
-        user_input = st.text_input(
-            "Ask your health question:",
-            placeholder="e.g. What are symptoms of asthma?"
-        )
-        submitted = st.form_submit_button("Ask")
+        user_input = st.text_input("Ask your health question")
+        submit = st.form_submit_button("Ask")
 
-    if submitted and user_input.strip():
-        st.session_state.active_index = None
+    if submit and user_input:
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
 
-        st.session_state.chat_history.append(
-            {"role": "user", "content": user_input}
-        )
+        response = chat_response(user_input)
 
-        with st.spinner("Analyzing medical information..."):
-            response = chat_response(user_input)
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
 
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": response}
-        )
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
+            st.markdown(f"**You:** {msg['content']}")
+        else:
+            st.markdown(f"**Assistant:**\n{msg['content']}")
 
-# ================== PDF MODE ==================
+# ================= PDF =================
 elif mode == "📄 PDF":
-    uploaded_pdf = st.file_uploader(
-        "Upload a medical PDF (reports, WHO guidelines, etc.)",
-        type=["pdf"]
-    )
+    uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
+    question = st.text_input("Ask question from PDF")
 
-    pdf_question = st.text_input("Ask a question from this PDF:")
-
-    if uploaded_pdf and pdf_question.strip():
-        with open("temp_uploaded.pdf", "wb") as f:
+    if uploaded_pdf and question:
+        with open("temp.pdf", "wb") as f:
             f.write(uploaded_pdf.read())
 
-        with st.spinner("Reading uploaded document..."):
-            pdf_answer = pdf_chat_response(
-                "temp_uploaded.pdf",
-                pdf_question
-            )
+        answer = pdf_chat_response("temp.pdf", question)
+        st.markdown(answer)
 
-        st.markdown(pdf_answer.replace("\n", "<br>"), unsafe_allow_html=True)
-
-# ================== IMAGE MODE ==================
+# ================= IMAGE =================
 elif mode == "🖼 Image":
-    uploaded_image = st.file_uploader(
-        "Upload a medical-related image",
-        type=["png", "jpg", "jpeg"]
-    )
+    uploaded_image = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
     if uploaded_image:
-        st.image(uploaded_image, caption="Uploaded Image")
-        st.info(image_safe_response())
+        st.image(uploaded_image)
+        st.warning("⚠️ Handwritten prescriptions may not be readable")
 
-# ------------------ CHAT RENDER FUNCTION ------------------
-def render_chat(upto=None):
-    history = st.session_state.chat_history
-    if upto is not None:
-        history = history[:upto + 2]
-
-    for msg in history:
-        if msg["role"] == "user":
-            st.markdown(f"""
-            <div class="chat-user">
-            <b>🧑 You</b><br>{msg["content"]}
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            # 🔥 CRITICAL FIX: preserve numbered points
-            formatted_content = msg["content"].replace("\n", "<br>")
-
-            st.markdown(f"""
-            <div class="chat-assistant">
-            <b>🤖 Assistant</b><br><br>
-            {formatted_content}
-            <div class="disclaimer">
-            ℹ️ Educational use only. Consult a qualified healthcare professional.
-            </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # Auto-scroll (ChatGPT-like)
-    st.markdown("<div id='bottom'></div>", unsafe_allow_html=True)
-    st.markdown("""
-    <script>
-    document.getElementById("bottom").scrollIntoView({behavior: "smooth"});
-    </script>
-    """, unsafe_allow_html=True)
-
-# ------------------ DISPLAY CHAT ------------------
-if mode == "💬 Chat":
-    render_chat(st.session_state.active_index)
+        result = image_analysis_response(uploaded_image)
+        st.markdown(result)

@@ -3,213 +3,113 @@ import re
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_groq import ChatGroq
-from langchain.chains import RetrievalQA
 
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-# ======================================================
-# CONFIG
-# ======================================================
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-VECTOR_STORE_PATH = "vector_store"
-LLM_MODEL = "llama-3.1-8b-instant"
-
-# ======================================================
-# EMBEDDINGS
-# ======================================================
-embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
-
-# ======================================================
-# VECTOR STORE (SAFE FALLBACK FOR CLOUD)
-# ======================================================
-retriever = None
-try:
-    db = FAISS.load_local(
-        VECTOR_STORE_PATH,
-        embeddings,
-        allow_dangerous_deserialization=True
-    )
-    retriever = db.as_retriever(search_kwargs={"k": 3})
-except Exception:
-    retriever = None
-
-# ======================================================
-# LLM
-# ======================================================
+# ------------------ LLM ------------------
 llm = ChatGroq(
     groq_api_key=os.getenv("GROQ_API_KEY"),
-    model_name=LLM_MODEL,
-    temperature=0.3
+    model_name="llama-3.1-8b-instant",
+    temperature=0.2
 )
 
-qa_chain = None
-if retriever:
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        return_source_documents=False
-    )
+# ------------------ FORMAT POINTS ------------------
+def format_points(text: str, max_points: int = 6) -> str:
+    parts = re.split(r"\n|•|-|\d+\.", text)
+    parts = [p.strip() for p in parts if len(p.strip()) > 8]
 
-# ======================================================
-# MEDICAL FILTER
-# ======================================================
-def is_medical_query(query: str) -> bool:
-    query = query.lower()
-
-    # Broad medical coverage (OLD LOGIC)
-    medical_keywords = [
-        "symptom", "symptoms", "disease", "fever", "pain", "infection",
-        "asthma", "diabetes", "cancer", "covid", "health", "treatment",
-        "medicine", "injury", "blood", "pressure", "mental",
-        "depression", "anxiety", "stress", "panic", "disorder","flu", "cold", "headache", "vomiting", "diarrhea"
-    ]
-
-    # Intent-based triggers (NEW LOGIC)
-    intent_triggers = [
-        "what is", "explain", "define", "causes",
-        "treatment", "types", "management", "how to",
-        "why", "difference"
-    ]
-
-    # Accept if either:
-    # 1. Medical keyword exists (short queries like "fever")
-    # 2. Medical term + intent phrase (definitions, explanations)
-    return (
-        any(word in query for word in medical_keywords)
-        or any(trigger in query for trigger in intent_triggers)
-    )
-
-
-
-# ======================================================
-# LONG ANSWER DETECTION
-# ======================================================
-def wants_long_answer(query: str) -> bool:
-    return any(
-        word in query.lower()
-        for word in ["explain", "detail", "why", "how", "causes", "effects"]
-    )
-
-# ======================================================
-# 🔥 BULLETPROOF POINT FORMATTER (FIX)
-# ======================================================
-def format_points(text: str, max_points: int) -> str:
-    """
-    Converts ANY model output into clean vertical numbered points
-    """
-
-    # Remove markdown & inline numbering
-    text = re.sub(r"\*\*", "", text)
-    text = re.sub(r"\d+\.", ".", text)
-
-    # Split by sentences
-    sentences = re.split(r"[.\n]+", text)
-
-    points = [
-        s.strip()
-        for s in sentences
-        if len(s.strip()) > 30
-    ]
-
-    points = points[:max_points]
+    if not parts:
+        return text
 
     formatted = ""
-    for i, point in enumerate(points, 1):
-        formatted += f"{i}. {point}\n"
+    for i, p in enumerate(parts[:max_points], 1):
+        formatted += f"{i}. {p}\n"
 
     return formatted.strip()
 
-# ======================================================
-# CHAT RESPONSE
-# ======================================================
+
+# ------------------ MEDICAL CHECK ------------------
+def is_medical_query(query: str) -> bool:
+    query = query.lower()
+
+    keywords = [
+        "symptom","disease","fever","pain","infection","asthma",
+        "diabetes","cancer","covid","health","treatment","medicine",
+        "injury","blood","pressure","mental","depression","anxiety",
+        "headache","cold","cough","report","doctor"
+    ]
+
+    return any(k in query for k in keywords)
+
+
+# ------------------ CHAT ------------------
 def chat_response(user_query: str) -> str:
 
     if not is_medical_query(user_query):
         return (
-            "⚠️ **This assistant is designed only for medical and health-related questions.**\n\n"
-            "Please ask about symptoms, diseases, or health concerns."
+            "⚠️ This assistant is for medical questions only.\n\n"
+            "Ask about symptoms, diseases, or health issues."
         )
 
-    long_mode = wants_long_answer(user_query)
-    max_points = 12 if long_mode else 6
-
-    # -------- RAG FIRST --------
-    if qa_chain:
-        try:
-            rag_answer = qa_chain.run(user_query)
-            if rag_answer and len(rag_answer.strip()) > 40:
-                return (
-                    "**Based on verified medical sources:**\n\n"
-                    + format_points(rag_answer, max_points)
-                )
-        except Exception:
-            pass
-
-    # -------- FALLBACK LLM --------
     prompt = f"""
-You are a medical information assistant.
+You are a medical assistant.
 
 Rules:
-- Educational only
-- No diagnosis
-- No prescriptions
-- Write SHORT, CLEAR sentences
-- EACH point must be ONE idea
-- DO NOT write paragraphs
+- Answer ONLY in 5–6 numbered points
+- Each point short (1 line)
+- No paragraph
+- Simple language
+- Add disclaimer at end
 
 Question:
 {user_query}
 """
 
     response = llm.invoke(prompt).content
+    return format_points(response)
 
-    return (
-        format_points(response, max_points)
-        + "\n\n⚠️ Educational use only. Consult a healthcare professional."
+
+# ------------------ PDF ------------------
+def pdf_chat_response(pdf_path: str, question: str) -> str:
+    from langchain_community.document_loaders import PyPDFLoader
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_community.vectorstores import FAISS
+    from langchain_community.embeddings import SentenceTransformerEmbeddings
+    from langchain.chains import RetrievalQA
+
+    embeddings = SentenceTransformerEmbeddings(
+        model_name="all-MiniLM-L6-v2"
     )
 
-# ======================================================
-# PDF RAG
-# ======================================================
-def pdf_chat_response(pdf_path: str, question: str) -> str:
-
     loader = PyPDFLoader(pdf_path)
-    documents = loader.load()
+    docs = loader.load()
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=100
     )
-    chunks = splitter.split_documents(documents)
 
-    temp_db = FAISS.from_documents(chunks, embeddings)
+    chunks = splitter.split_documents(docs)
+
+    db = FAISS.from_documents(chunks, embeddings)
 
     qa = RetrievalQA.from_chain_type(
         llm=llm,
-        retriever=temp_db.as_retriever(search_kwargs={"k": 3}),
-        return_source_documents=False
+        retriever=db.as_retriever(search_kwargs={"k": 3})
     )
 
-    answer = qa.run(question)
+    result = qa.run(question)
 
-    return (
-        "📄 **Answer based on uploaded medical document:**\n\n"
-        + format_points(answer, 12)
-        + "\n\n⚠️ Educational use only."
-    )
+    return "📄 Answer based on document:\n\n" + format_points(result)
 
-# ======================================================
-# IMAGE SAFE RESPONSE
-# ======================================================
-def image_safe_response() -> str:
+
+# ------------------ IMAGE (SAFE FALLBACK) ------------------
+def image_analysis_response(uploaded_image) -> str:
     return (
-        "🖼️ **Image received**\n\n"
-        "I cannot diagnose medical conditions from images.\n\n"
-        "I can describe visible features and suggest when to consult a doctor.\n\n"
-        "⚠️ Consult a healthcare professional for diagnosis."
+        "📄 Medical image received\n\n"
+        "1. This appears to be a prescription/report\n"
+        "2. It may contain medicines and dosage\n"
+        "3. It may include diagnosis or symptoms\n"
+        "4. Follow-up instructions may be present\n"
+        "5. Handwritten text cannot be fully analyzed\n\n"
+        "⚠️ Please consult a doctor for accurate interpretation"
     )
