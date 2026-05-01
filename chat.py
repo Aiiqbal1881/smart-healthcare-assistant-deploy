@@ -1,144 +1,113 @@
 import os
-import re
 from dotenv import load_dotenv
 load_dotenv()
 
+import re
+
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
+
+# PDF
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.embeddings import FakeEmbeddings
 
-# ------------------ CONFIG ------------------
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-VECTOR_STORE_PATH = "vector_store"
-LLM_MODEL = "llama-3.1-8b-instant"
-
-# ------------------ EMBEDDINGS ------------------
-embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
-
-# ------------------ LOAD VECTOR STORE (SAFE) ------------------
-try:
-    db = FAISS.load_local(
-        VECTOR_STORE_PATH,
-        embeddings,
-        allow_dangerous_deserialization=True
-    )
-    retriever = db.as_retriever(search_kwargs={"k": 3})
-except:
-    retriever = None
-
-# ------------------ LOAD LLM ------------------
+# ------------------ LLM ------------------
 llm = ChatGroq(
     groq_api_key=os.getenv("GROQ_API_KEY"),
-    model_name=LLM_MODEL,
+    model_name="llama-3.1-8b-instant",
     temperature=0.3
 )
 
 # ------------------ MEDICAL CHECK ------------------
+MEDICAL_TERMS = [
+    "fever", "pain", "asthma", "diabetes", "cancer", "covid",
+    "infection", "blood", "pressure", "anxiety", "depression",
+    "heart", "chest", "breathing", "symptom", "treatment"
+]
+
 def is_medical_query(query: str) -> bool:
     query = query.lower()
+    return any(word in query for word in MEDICAL_TERMS)
 
-    medical_terms = [
-        "pain","fever","burning","chest","heartburn","acid","reflux",
-        "cough","breathing","infection","disease","symptoms",
-        "treatment","doctor","medicine","anxiety","depression",
-        "vomit","nausea","headache","stomach","pressure"
-    ]
-
-    return any(term in query for term in medical_terms)
-
-# ------------------ FORMAT ------------------
-def format_points(text: str, max_points=6) -> str:
+# ------------------ FORMAT POINTS ------------------
+def format_points(text: str) -> str:
     lines = re.split(r"\n|\d+\.", text)
-    points = [line.strip("-• ") for line in lines if len(line.strip()) > 15]
+    points = [l.strip("-• ") for l in lines if len(l.strip()) > 15]
 
-    points = points[:max_points]
+    if not points:
+        return text
 
-    return "\n".join([f"{i+1}. {p}" for i, p in enumerate(points)])
+    return "\n".join([f"{i+1}. {p}" for i, p in enumerate(points[:8])])
 
-# ------------------ MAIN CHAT ------------------
+# ------------------ CHAT ------------------
 def chat_response(user_query: str) -> str:
 
     if not is_medical_query(user_query):
         return (
-            "⚠️ This assistant is for medical questions only.\n\n"
-            "Please ask about symptoms, diseases, or health issues."
+            "⚠️ **This assistant is for medical questions only.**\n\n"
+            "Ask about symptoms, diseases, or health issues."
         )
 
-    # -------- TRY RAG --------
-    if retriever:
-        try:
-            qa_chain = RetrievalQA.from_chain_type(
-                llm=llm,
-                retriever=retriever
-            )
-
-            rag_answer = qa_chain.run(user_query)
-
-            if rag_answer:
-                return "**Based on medical knowledge:**\n\n" + format_points(rag_answer)
-
-        except:
-            pass
-
-    # -------- FALLBACK (DOCTOR STYLE) --------
     prompt = f"""
-You are a professional medical assistant.
+You are a medical assistant.
 
-Instructions:
-- Understand patient symptoms
-- Suggest possible conditions (not diagnosis)
+Rules:
+- Answer in numbered points (max 6–8 points)
+- Keep answer clear and short
 - Give practical advice
-- Keep response SHORT and CLEAR
-- Use 5-6 bullet points ONLY
+- Add when to see a doctor
 
 Question:
 {user_query}
 """
 
-    response = llm.invoke(prompt).content
-    return format_points(response)
+    try:
+        response = llm.invoke(prompt).content
+        return format_points(response)
 
-# =========================
-# PDF CHAT (SAFE)
-# =========================
+    except Exception:
+        return "⚠️ Error generating response."
+
+# ------------------ PDF ------------------
 def pdf_chat_response(pdf_path: str, question: str) -> str:
-    from langchain_community.document_loaders import PyPDFLoader
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-    loader = PyPDFLoader(pdf_path)
-    documents = loader.load()
+    try:
+        loader = PyPDFLoader(pdf_path)
+        documents = loader.load()
 
-    if not documents:
-        return "⚠️ No readable content found in PDF."
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=800,
+            chunk_overlap=100
+        )
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=100
-    )
-    chunks = splitter.split_documents(documents)
+        chunks = splitter.split_documents(documents)
 
-    if not chunks:
-        return "⚠️ This PDF may be scanned or empty."
+        db = FAISS.from_documents(
+            chunks,
+            FakeEmbeddings(size=384)
+        )
 
-    db = FAISS.from_documents(chunks, embeddings)
+        qa = RetrievalQA.from_chain_type(
+            llm=llm,
+            retriever=db.as_retriever(search_kwargs={"k": 3})
+        )
 
-    qa = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=db.as_retriever(search_kwargs={"k": 3})
-    )
+        answer = qa.run(question)
 
-    answer = qa.run(question)
+        return format_points(answer)
 
-    return "📄 **Answer based on document:**\n\n" + format_points(answer)
+    except Exception as e:
+        return f"⚠️ PDF processing error: {str(e)}"
 
-# =========================
-# IMAGE RESPONSE
-# =========================
-def image_safe_response() -> str:
+# ------------------ IMAGE ------------------
+def image_safe_response():
     return (
         "🖼️ Image received\n\n"
-        "This appears to be a medical document or prescription.\n\n"
-        "⚠️ Currently, text extraction from images is not supported here.\n\n"
-        "👉 Please upload as PDF or type details manually."
+        "I cannot diagnose from images.\n\n"
+        "1. I can describe visible features\n"
+        "2. Suggest possible conditions\n"
+        "3. Recommend doctor consultation\n\n"
+        "⚠️ Always consult a healthcare professional."
     )
