@@ -1,91 +1,41 @@
 import streamlit as st
 from chat import chat_response, pdf_chat_response, image_safe_response
 
-# ------------------ PAGE ------------------
-st.set_page_config(
-    page_title="Smart Healthcare Assistant",
-    page_icon="🏥",
-    layout="wide"
-)
+st.set_page_config(page_title="Smart Healthcare Assistant", layout="wide")
 
-# ------------------ STATE ------------------
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-# ------------------ SIDEBAR ------------------
-with st.sidebar:
-    st.title("🕘 Chat History")
-
-    for msg in st.session_state.chat_history:
-        if msg["role"] == "user":
-            st.caption(msg["content"][:40])
-
-    st.markdown("---")
-    st.markdown("""
-**Why RAG?**
-- Reduces hallucination  
-- Uses documents  
-
-**Safety**
-- No diagnosis  
-- Educational only  
-""")
-
-# ------------------ MAIN ------------------
 st.title("🏥 Smart Healthcare Assistant")
+st.caption("AI-based medical guidance (non-prescriptive)")
 
+# ------------------ MODE ------------------
 mode = st.radio(
-    "Choose Mode:",
+    "Choose interaction mode:",
     ["💬 Chat", "📄 PDF", "🖼 Image"],
     horizontal=True
 )
 
-# ================= CHAT =================
+# ================== CHAT ==================
 if mode == "💬 Chat":
-
-    user_input = st.text_input("Ask your question:")
+    user_input = st.text_input("Ask your health question:")
 
     if st.button("Ask") and user_input:
-
-        st.session_state.chat_history.append(
-            {"role": "user", "content": user_input}
-        )
-
         with st.spinner("Thinking..."):
             response = chat_response(user_input)
+        st.success(response)
 
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": response}
-        )
-
-    # DISPLAY
-    for msg in st.session_state.chat_history:
-        if msg["role"] == "user":
-            st.markdown(f"**🧑 You:** {msg['content']}")
-        else:
-            st.markdown(f"**🤖 Assistant:**\n{msg['content']}")
-            st.info("Educational use only")
-
-# ================= PDF =================
+# ================== PDF ==================
 elif mode == "📄 PDF":
+    uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+    question = st.text_input("Ask question from PDF:")
 
-    file = st.file_uploader("Upload PDF", type=["pdf"])
-    question = st.text_input("Ask from PDF")
+    if uploaded_file and question:
+        with st.spinner("Analyzing PDF..."):
+            answer = pdf_chat_response(uploaded_file, question)
+        st.success(answer)
 
-    if file and question:
-        with open("temp.pdf", "wb") as f:
-            f.write(file.read())
-
-        with st.spinner("Reading PDF..."):
-            answer = pdf_chat_response("temp.pdf", question)
-
-        st.markdown(answer)
-
-# ================= IMAGE =================
+# ================== IMAGE ==================
 elif mode == "🖼 Image":
+    uploaded_image = st.file_uploader("Upload image", type=["jpg", "png", "jpeg"])
 
-    image = st.file_uploader("Upload Image", type=["jpg", "png"])
-
-    if image:
-        st.image(image)
+    if uploaded_image:
+        st.image(uploaded_image)
         st.info(image_safe_response())

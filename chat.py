@@ -5,39 +5,43 @@ load_dotenv()
 from langchain_groq import ChatGroq
 
 # -----------------------------
-# LLM Setup
+# LLM SETUP
 # -----------------------------
 def get_llm():
     return ChatGroq(
         groq_api_key=os.getenv("GROQ_API_KEY"),
-        model_name="llama3-8b-8192"
+        model_name="llama3-8b-8192",
+        temperature=0.3,
+        max_tokens=1024
     )
 
 # -----------------------------
-# CHAT RESPONSE (Medical)
+# CHAT RESPONSE (MEDICAL)
 # -----------------------------
 def chat_response(user_input):
     llm = get_llm()
 
     prompt = f"""
-You are a helpful medical assistant.
+You are a professional healthcare assistant.
 
-User symptoms:
+User query:
 {user_input}
 
-Give:
-1. Possible common causes
-2. General advice (non-prescriptive)
-3. When to consult a doctor
+Give answer in this format:
 
-Keep it simple and safe.
+1. Possible causes
+2. Common symptoms
+3. General advice (safe, non-prescriptive)
+4. When to consult a doctor
+
+Keep it clear and simple.
 """
 
     return llm.invoke(prompt).content
 
 
 # -----------------------------
-# PDF RESPONSE (SAFE VERSION)
+# PDF RESPONSE (FIXED)
 # -----------------------------
 def pdf_chat_response(file, question):
     from langchain_community.document_loaders import PyPDFLoader
@@ -45,26 +49,27 @@ def pdf_chat_response(file, question):
     from langchain_community.vectorstores import FAISS
     from langchain_community.embeddings import FakeEmbeddings
 
-    # Save temp file
-    with open("temp.pdf", "wb") as f:
-        f.write(file.read())
+    # ✅ FIX: handle both string path & uploaded file
+    if isinstance(file, str):
+        file_path = file
+    else:
+        file_path = "temp.pdf"
+        with open(file_path, "wb") as f:
+            f.write(file.read())
 
-    loader = PyPDFLoader("temp.pdf")
+    loader = PyPDFLoader(file_path)
     docs = loader.load()
 
-    if len(docs) == 0:
-        return "No content found in PDF."
+    if not docs:
+        return "❌ No readable content found in PDF."
 
-    # Split
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(docs)
 
-    if len(chunks) == 0:
-        return "PDF has no readable content."
+    if not chunks:
+        return "❌ PDF has no usable text."
 
-    # Use FakeEmbeddings (NO TORCH ISSUE)
     embeddings = FakeEmbeddings(size=384)
-
     db = FAISS.from_documents(chunks, embeddings)
 
     results = db.similarity_search(question, k=2)
@@ -74,11 +79,15 @@ def pdf_chat_response(file, question):
     llm = get_llm()
 
     prompt = f"""
-Answer based on the PDF:
+You are analyzing a medical report.
 
+Report Content:
 {context}
 
-Question: {question}
+Question:
+{question}
+
+Give a clear explanation like a doctor.
 """
 
     return llm.invoke(prompt).content
@@ -87,14 +96,14 @@ Question: {question}
 # -----------------------------
 # IMAGE RESPONSE (SAFE)
 # -----------------------------
-def image_safe_response(image):
+def image_safe_response(image=None):
     return """
-I cannot diagnose medical conditions from images.
+⚠️ I cannot diagnose medical conditions from images.
 
 However, I can help with:
 1. General observations
 2. Possible explanations
 3. When to consult a doctor
 
-Please describe your symptoms for better help.
+Please describe your symptoms for better assistance.
 """

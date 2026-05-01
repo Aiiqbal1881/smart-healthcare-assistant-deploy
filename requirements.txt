@@ -1,7 +1,7 @@
 streamlit==1.32.0
 
 langchain==0.1.14
-langchain-community==0.0.30   # ✅ FIXED (IMPORTANT)
+langchain-community==0.0.30
 langchain-groq==0.1.3
 
 faiss-cpu==1.7.4
