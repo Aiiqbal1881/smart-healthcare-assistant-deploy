@@ -113,3 +113,16 @@ def image_analysis_response(uploaded_image) -> str:
         "5. Handwritten text cannot be fully analyzed here\n\n"
         "⚠️ Please consult a doctor for accurate interpretation"
     )
+# =========================
+# IMAGE SAFE ANALYSIS
+# =========================
+def image_safe_response() -> str:
+    return (
+        "🖼️ **Image received**\n\n"
+        "I cannot diagnose medical conditions from images.\n\n"
+        "However, I can help by:\n"
+        "1. Describing visible features\n"
+        "2. Explaining possible medical context\n"
+        "3. Suggesting when to consult a doctor\n\n"
+        "⚠️ Always consult a healthcare professional."
+    )
