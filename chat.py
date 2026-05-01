@@ -35,7 +35,7 @@ def is_medical_query(query: str) -> bool:
         "symptom","disease","fever","pain","infection","asthma",
         "diabetes","cancer","covid","health","treatment","medicine",
         "injury","blood","pressure","mental","depression","anxiety",
-        "headache","cold","cough","report","doctor"
+        "headache","cold","cough","doctor","report"
     ]
 
     return any(k in query for k in keywords)
@@ -55,10 +55,10 @@ You are a medical assistant.
 
 Rules:
 - Answer ONLY in 5–6 numbered points
-- Each point short (1 line)
-- No paragraph
+- Each point must be short
+- No paragraph format
 - Simple language
-- Add disclaimer at end
+- Add doctor disclaimer at end
 
 Question:
 {user_query}
@@ -102,14 +102,14 @@ def pdf_chat_response(pdf_path: str, question: str) -> str:
     return "📄 Answer based on document:\n\n" + format_points(result)
 
 
-# ------------------ IMAGE (SAFE FALLBACK) ------------------
+# ------------------ IMAGE ------------------
 def image_analysis_response(uploaded_image) -> str:
     return (
         "📄 Medical image received\n\n"
-        "1. This appears to be a prescription/report\n"
-        "2. It may contain medicines and dosage\n"
+        "1. This appears to be a prescription or medical report\n"
+        "2. It may contain medicines and dosage instructions\n"
         "3. It may include diagnosis or symptoms\n"
-        "4. Follow-up instructions may be present\n"
-        "5. Handwritten text cannot be fully analyzed\n\n"
+        "4. Doctor advice or follow-up may be present\n"
+        "5. Handwritten text cannot be fully analyzed here\n\n"
         "⚠️ Please consult a doctor for accurate interpretation"
     )
