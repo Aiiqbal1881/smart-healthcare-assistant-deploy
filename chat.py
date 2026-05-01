@@ -4,61 +4,93 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_groq import ChatGroq
+from langchain.chains import RetrievalQA
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 
-# ------------------ LLM ------------------
+# ------------------ CONFIG ------------------
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+VECTOR_STORE_PATH = "vector_store"
+LLM_MODEL = "llama-3.1-8b-instant"
+
+# ------------------ EMBEDDINGS ------------------
+embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
+
+# ------------------ LOAD VECTOR STORE (SAFE) ------------------
+try:
+    db = FAISS.load_local(
+        VECTOR_STORE_PATH,
+        embeddings,
+        allow_dangerous_deserialization=True
+    )
+    retriever = db.as_retriever(search_kwargs={"k": 3})
+except:
+    retriever = None
+
+# ------------------ LOAD LLM ------------------
 llm = ChatGroq(
     groq_api_key=os.getenv("GROQ_API_KEY"),
-    model_name="llama-3.1-8b-instant",
-    temperature=0.2
+    model_name=LLM_MODEL,
+    temperature=0.3
 )
-
-# ------------------ FORMAT POINTS ------------------
-def format_points(text: str, max_points: int = 6) -> str:
-    parts = re.split(r"\n|•|-|\d+\.", text)
-    parts = [p.strip() for p in parts if len(p.strip()) > 8]
-
-    if not parts:
-        return text
-
-    formatted = ""
-    for i, p in enumerate(parts[:max_points], 1):
-        formatted += f"{i}. {p}\n"
-
-    return formatted.strip()
-
 
 # ------------------ MEDICAL CHECK ------------------
 def is_medical_query(query: str) -> bool:
     query = query.lower()
 
-    keywords = [
-        "symptom","disease","fever","pain","infection","asthma",
-        "diabetes","cancer","covid","health","treatment","medicine",
-        "injury","blood","pressure","mental","depression","anxiety",
-        "headache","cold","cough","doctor","report"
+    medical_terms = [
+        "pain","fever","burning","chest","heartburn","acid","reflux",
+        "cough","breathing","infection","disease","symptoms",
+        "treatment","doctor","medicine","anxiety","depression",
+        "vomit","nausea","headache","stomach","pressure"
     ]
 
-    return any(k in query for k in keywords)
+    return any(term in query for term in medical_terms)
 
+# ------------------ FORMAT ------------------
+def format_points(text: str, max_points=6) -> str:
+    lines = re.split(r"\n|\d+\.", text)
+    points = [line.strip("-• ") for line in lines if len(line.strip()) > 15]
 
-# ------------------ CHAT ------------------
+    points = points[:max_points]
+
+    return "\n".join([f"{i+1}. {p}" for i, p in enumerate(points)])
+
+# ------------------ MAIN CHAT ------------------
 def chat_response(user_query: str) -> str:
 
     if not is_medical_query(user_query):
         return (
             "⚠️ This assistant is for medical questions only.\n\n"
-            "Ask about symptoms, diseases, or health issues."
+            "Please ask about symptoms, diseases, or health issues."
         )
 
-    prompt = f"""
-You are a medical assistant.
+    # -------- TRY RAG --------
+    if retriever:
+        try:
+            qa_chain = RetrievalQA.from_chain_type(
+                llm=llm,
+                retriever=retriever
+            )
 
-Rules:
-- Answer ONLY in 5–6 numbered points
-- Each point must be short
-- No paragraph format
-- Simple language
-- Add doctor disclaimer at end
+            rag_answer = qa_chain.run(user_query)
+
+            if rag_answer:
+                return "**Based on medical knowledge:**\n\n" + format_points(rag_answer)
+
+        except:
+            pass
+
+    # -------- FALLBACK (DOCTOR STYLE) --------
+    prompt = f"""
+You are a professional medical assistant.
+
+Instructions:
+- Understand patient symptoms
+- Suggest possible conditions (not diagnosis)
+- Give practical advice
+- Keep response SHORT and CLEAR
+- Use 5-6 bullet points ONLY
 
 Question:
 {user_query}
@@ -67,28 +99,27 @@ Question:
     response = llm.invoke(prompt).content
     return format_points(response)
 
-
-# ------------------ PDF ------------------
+# =========================
+# PDF CHAT (SAFE)
+# =========================
 def pdf_chat_response(pdf_path: str, question: str) -> str:
     from langchain_community.document_loaders import PyPDFLoader
     from langchain.text_splitter import RecursiveCharacterTextSplitter
-    from langchain_community.vectorstores import FAISS
-    from langchain_community.embeddings import SentenceTransformerEmbeddings
-    from langchain.chains import RetrievalQA
-
-    embeddings = SentenceTransformerEmbeddings(
-        model_name="all-MiniLM-L6-v2"
-    )
 
     loader = PyPDFLoader(pdf_path)
-    docs = loader.load()
+    documents = loader.load()
+
+    if not documents:
+        return "⚠️ No readable content found in PDF."
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=100
     )
+    chunks = splitter.split_documents(documents)
 
-    chunks = splitter.split_documents(docs)
+    if not chunks:
+        return "⚠️ This PDF may be scanned or empty."
 
     db = FAISS.from_documents(chunks, embeddings)
 
@@ -97,32 +128,17 @@ def pdf_chat_response(pdf_path: str, question: str) -> str:
         retriever=db.as_retriever(search_kwargs={"k": 3})
     )
 
-    result = qa.run(question)
+    answer = qa.run(question)
 
-    return "📄 Answer based on document:\n\n" + format_points(result)
+    return "📄 **Answer based on document:**\n\n" + format_points(answer)
 
-
-# ------------------ IMAGE ------------------
-def image_analysis_response(uploaded_image) -> str:
-    return (
-        "📄 Medical image received\n\n"
-        "1. This appears to be a prescription or medical report\n"
-        "2. It may contain medicines and dosage instructions\n"
-        "3. It may include diagnosis or symptoms\n"
-        "4. Doctor advice or follow-up may be present\n"
-        "5. Handwritten text cannot be fully analyzed here\n\n"
-        "⚠️ Please consult a doctor for accurate interpretation"
-    )
 # =========================
-# IMAGE SAFE ANALYSIS
+# IMAGE RESPONSE
 # =========================
 def image_safe_response() -> str:
     return (
-        "🖼️ **Image received**\n\n"
-        "I cannot diagnose medical conditions from images.\n\n"
-        "However, I can help by:\n"
-        "1. Describing visible features\n"
-        "2. Explaining possible medical context\n"
-        "3. Suggesting when to consult a doctor\n\n"
-        "⚠️ Always consult a healthcare professional."
+        "🖼️ Image received\n\n"
+        "This appears to be a medical document or prescription.\n\n"
+        "⚠️ Currently, text extraction from images is not supported here.\n\n"
+        "👉 Please upload as PDF or type details manually."
     )
